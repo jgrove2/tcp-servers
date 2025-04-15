@@ -41,11 +41,9 @@ const (
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	buf := make([]byte, 0, 8) // initial buffer capacity
 	tmp := make([]byte, 8)
-	req := &Request{state: 0, Headers: headers.NewHeaders()}
+	req := &Request{RequestLine: RequestLine{}, state: 0, Headers: headers.NewHeaders()}
 
 	for req.state != 3 {
-		log.Printf("Request state: %d", req.state)
-
 		consumed, err := req.parse(buf)
 		if err != nil {
 			return nil, err
@@ -55,7 +53,6 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			// Shift unparsed data to the front
 			copy(buf, buf[consumed:])
 			buf = buf[:len(buf)-consumed]
-			log.Println(buf)
 			continue
 		}
 		if err == io.EOF {
@@ -75,7 +72,6 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		}
 
 		buf = append(buf, tmp[:n]...)
-		log.Println(buf)
 
 		consumed, err = req.parse(buf)
 		if err != nil {
@@ -92,7 +88,6 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			break
 		}
 	}
-	log.Println(buf)
 
 	return req, nil
 }
@@ -102,10 +97,10 @@ func (r *Request) parse(data []byte) (int, error) {
 	if r.state == 3 {
 		return 0, nil
 	}
-	log.Println(data)
-	if len(data) == 0 || data == nil {
+	in := strings.Index(string(data), "\r\n")
+	if len(data) == 2 && in == 0 {
 		r.state = 3
-		return 0, nil
+		return 2, nil
 	}
 	// Parse the request line
 	if r.state == 0 {
@@ -113,23 +108,20 @@ func (r *Request) parse(data []byte) (int, error) {
 		if index == -1 {
 			return 0, nil
 		}
-		requestLine, err := parseRequestLine(string(data[:index]))
+		err := r.parseRequestLine(string(data[:index]))
 		if err != nil {
 			return 0, err
 		}
-		r.RequestLine = requestLine
 		r.state = 1
 		return index + 2, nil
 		// Parse the headers
 	} else if r.state == 1 {
 		n, done, err := r.Headers.Parse(data)
-		log.Println(n, done, r.Headers)
 		if err != nil {
 			return 0, err
 		}
 		if done {
 			if r.Headers.Get("content-length") != "" {
-				log.Println(r.Headers)
 				r.state = 2
 				return n + 2, nil
 			}
@@ -182,10 +174,10 @@ func (r *Request) parse(data []byte) (int, error) {
 	return 0, nil
 }
 
-func parseRequestLine(line string) (RequestLine, error) {
+func (r *Request) parseRequestLine(line string) error {
 	parsed := strings.Split(line, " ")
 	if len(parsed) != 3 {
-		return RequestLine{}, fmt.Errorf("invalid request line: %s", line)
+		return fmt.Errorf("invalid request line: %s", line)
 	}
 	httpVersion := strings.Split(parsed[2], "/")
 	method := parsed[0]
@@ -201,7 +193,11 @@ func parseRequestLine(line string) (RequestLine, error) {
 	case string(PATCH):
 		break
 	default:
-		return RequestLine{}, fmt.Errorf("invalid method %s", method)
+		return fmt.Errorf("invalid method %s", method)
 	}
-	return RequestLine{HttpVersion: httpVersion[1], RequestTarget: parsed[1], Method: method}, nil
+	r.RequestLine.HttpVersion = httpVersion[1]
+	r.RequestLine.RequestTarget = parsed[1]
+	r.RequestLine.Method = method
+	log.Println(r.RequestLine)
+	return nil
 }
